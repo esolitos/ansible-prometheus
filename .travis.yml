@@ -1,25 +1,23 @@
+---
 sudo: required
 language: python
 cache: pip
 services:
   - docker
 env:
-  - ANSIBLE=2.2.3 PROMETHEUS=1.8.2
-  - ANSIBLE=2.2.3 PROMETHEUS=2.0.0
-  - ANSIBLE=2.3.3 PROMETHEUS=1.8.2
-  - ANSIBLE=2.3.3 PROMETHEUS=2.0.0
-  - ANSIBLE=2.4.3 PROMETHEUS=1.8.2
-  - ANSIBLE=2.4.3 PROMETHEUS=2.0.0
+  - ANSIBLE=2.4
+  - ANSIBLE=2.5
+  - ANSIBLE=2.6
+matrix:
+  fast_finish: true
 install:
-  - pip install ansible==${ANSIBLE} ansible-lint>=3.4.15 molecule==1.25.0 docker git-semver 'testinfra>=1.7.0,<=1.10.1' jmespath
-before_script:
-  - ansible-lint tests/playbook.yml
+  - pip install tox-travis git-semver
 script:
-  - molecule test
+  - tox
 deploy:
   provider: script
   skip_cleanup: true
-  script: ./.travis/generatetag.sh
+  script: .travis/releaser.sh
   on:
     branch: master
 branches:

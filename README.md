@@ -6,6 +6,7 @@
 [![License](https://img.shields.io/badge/license-MIT%20License-brightgreen.svg)](https://opensource.org/licenses/MIT)
 [![Ansible Role](https://img.shields.io/badge/ansible%20role-cloudalchemy.prometheus-blue.svg)](https://galaxy.ansible.com/cloudalchemy/prometheus/)
 [![GitHub tag](https://img.shields.io/github/tag/cloudalchemy/ansible-prometheus.svg)](https://github.com/cloudalchemy/ansible-prometheus/tags)
+[![IRC](https://img.shields.io/badge/irc.freenode.net-%23cloudalchemy-yellow.svg)](https://kiwiirc.com/nextclient/#ircs://irc.freenode.net/#cloudalchemy)
 
 ## Description
 
@@ -13,9 +14,9 @@ Deploy [Prometheus](https://github.com/prometheus/prometheus) monitoring system 
 
 ## Requirements
 
-- Ansible > 2.2
-- go-lang installed on deployer machine (same one where ansible is installed)
-- jmespath on deployer machine. If you are using Ansble from a Python virtualenv, install *jmespath* to the same virtualenv via pip.
+- Ansible >= 2.4
+- jmespath on deployer machine. If you are using Ansible from a Python virtualenv, install *jmespath* to the same virtualenv via pip.
+- gnu-tar on Mac deployer host (`brew install gnu-tar`)
 
 ## Role Variables
 
@@ -23,7 +24,7 @@ All variables which can be overridden are stored in [defaults/main.yml](defaults
 
 | Name           | Default Value | Description                        |
 | -------------- | ------------- | -----------------------------------|
-| `prometheus_version` | 2.2.0  | Prometheus package version |
+| `prometheus_version` | 2.3.1  | Prometheus package version. Also accepts `latest` as parameter. Only prometheus 2.x is supported |
 | `prometheus_config_dir` | /etc/prometheus | Path to directory with prometheus configuration |
 | `prometheus_db_dir` | /var/lib/prometheus | Path to directory with prometheus database |
 | `prometheus_web_listen_address` | "0.0.0.0:9090" | Address on which prometheus will be listening |
@@ -39,6 +40,47 @@ All variables which can be overridden are stored in [defaults/main.yml](defaults
 | `prometheus_scrape_configs` | [defaults/main.yml#L58](https://github.com/cloudalchemy/ansible-prometheus/blob/ff7830d06ba57be1177f2b6fca33a4dd2d97dc20/defaults/main.yml#L47) | Prometheus scrape jobs provided in same format as in [official docs](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config) |
 | `prometheus_config_file` | "prometheus.yml.j2" | Variable used to provide custom prometheus configuration file in form of ansible template |
 | `prometheus_alert_rules` | [defaults/main.yml#L58](https://github.com/cloudalchemy/ansible-prometheus/blob/ff7830d06ba57be1177f2b6fca33a4dd2d97dc20/defaults/main.yml#L58) | Full list of alerting rules which will be copied to `{{ prometheus_config_dir }}/rules/basic.rules`. Alerting rules can be also provided by other files located in `{{ prometheus_config_dir }}/rules/` which have `*.rules` extension |
+
+### Relation between `prometheus_scrape_configs` and `prometheus_targets`
+
+#### Short version
+
+`prometheus_targets` is just a map used to create multiple files located in "{{ prometheus_config_dir }}/file_sd" directory. Where file names are composed from top-level keys in that map with `.yml` suffix. Those files store [file_sd scrape targets data](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#file_sd_config) and they need to be read in `prometheus_scrape_configs`.
+
+#### Long version
+
+A part of *prometheus.yml* configuration file which describes what is scraped by prometheus is stored in `prometheus_scrape_configs`. For this variable same configuration options as described in [prometheus docs](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#<scrape_config>) are used.
+
+Meanwhile `prometheus_targets` is our way of adopting [prometheus scrape type `file_sd`](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#<file_sd_config>). It defines a map of files with their content. A top-level keys are base names of files which need to have their own scrape job in `prometheus_scrape_configs` and values are a content of those files.
+
+All this mean that you CAN use custom `prometheus_scrape_configs` with `prometheus_targets` set to `{}`. However when you set anything in `prometheus_targets` it needs to be mapped to `prometheus_scrape_configs`. If it isn't you'll get an error in preflight checks.
+
+#### Example
+
+Lets look at our default configuration, which shows all features. By default we have this `prometheus_targets`:
+```
+prometheus_targets:
+  node:  # This is a base file name. File is located in "{{ prometheus_config_dir }}/file_sd/<<BASENAME>>.yml"
+    - targets:              #
+        - localhost:9100    # All this is a targets section in file_sd format
+      labels:               #
+        env: test           #
+```
+Such config will result in creating one file named `node.yml` in `{{ prometheus_config_dir }}/file_sd` directory.
+
+Next this file needs to be loaded into scrape config. Here is modified version of our default `prometheus_scrape_configs`:
+```
+prometheus_scrape_configs:
+  - job_name: "prometheus"    # Custom scrape job, here using `static_config`
+    metrics_path: "/metrics"  
+    static_configs:
+      - targets:
+          - "localhost:9090"
+  - job_name: "example-node-file-servicediscovery"
+    file_sd_configs:
+      - files:
+          - "{{ prometheus_config_dir }}/file_sd/node.yml" # This line loads file created from `prometheus_targets`
+```
 
 ## Example
 
@@ -70,17 +112,30 @@ Due to similarities in templating engines, every templates should be wrapped in 
 
 ## Local Testing
 
-The preferred way of locally testing the role is to use Docker and [molecule](https://github.com/metacloud/molecule) (v1.25). You will have to install Docker on your system. See Get started for a Docker package suitable to for your system.
-All packages you need to can be specified in one line:
+The preferred way of locally testing the role is to use Docker and [molecule](https://github.com/metacloud/molecule) (v2.x). You will have to install Docker on your system. See "Get started" for a Docker package suitable to for your system.
+We are using tox to simplify process of testing on multiple ansible versions. To install tox execute:
 ```sh
-pip install ansible ansible-lint>=3.4.15 molecule==1.25.0 docker testinfra>=1.7.0 jmespath
+pip install tox
 ```
-This should be similiar to one listed in `.travis.yml` file in `install` section.
-After installing test suit you can run test by running
+To run tests on all ansible versions (WARNING: this can take some time)
 ```sh
-molecule test
+tox
 ```
-For more information about molecule go to their [docs](http://molecule.readthedocs.io/en/stable-1.25/).
+To run a custom molecule command on custom environment with only default test scenario:
+```sh
+tox -e py27-ansible25 -- molecule test -s default
+```
+For more information about molecule go to their [docs](http://molecule.readthedocs.io/en/latest/).
+
+If you would like to run tests on remote docker host just specify `DOCKER_HOST` variable before running tox tests.
+
+## Travis CI
+
+Combining molecule and travis CI allows us to test how new PRs will behave when used with multiple ansible versions and multiple operating systems. This also allows use to create test scenarios for different role configurations. As a result we have a quite large test matrix (42 parallel role executions in case of [ansible-prometheus](https://github.com/cloudalchemy/ansible-prometheus)) which will take more time than local testing, so please be patient.
+
+## Changelog
+
+See [changelog](CHANGELOG.md).
 
 ## Contributing
 
